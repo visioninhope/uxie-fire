@@ -1,11 +1,14 @@
-import fireworks from "@/lib/fireworks";
+import { flashcardSchema } from "@/models/flashcard";
 import { authOptions } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { OpenAIStream, StreamingTextResponse } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { streamObject } from "ai";
 import { getServerSession } from "next-auth";
 
 export async function POST(req: Request, res: Response) {
   const { flashcardId, docId, prompt } = await req.json();
+  console.log(flashcardId, docId, prompt, "here");
+  // return;
 
   if (typeof flashcardId !== "string" || typeof prompt !== "string")
     return new Response("Not found", { status: 404 });
@@ -38,7 +41,7 @@ export async function POST(req: Request, res: Response) {
     },
   });
 
-  if (!flashcard) return new Response("Not found", { status: 404 });
+  if (!flashcard) return new Response("Flashcard not found", { status: 404 });
 
   const reqPrompt = `Your task is to provide feedback on the user's response. Please format the information as follows:
   - In the first section, mention the aspects the user accurately identified, followed by the delimiter "||".
@@ -51,19 +54,23 @@ export async function POST(req: Request, res: Response) {
   Question: ${flashcard.question}
   Correct answer: ${flashcard.answer}`;
 
-  const response = await fireworks.completions.create({
-    model: "accounts/fireworks/models/mixtral-8x7b-instruct",
-    max_tokens: 1000,
-    stream: true,
-    prompt: reqPrompt,
-  });
+  // const response = await fireworks.completions.create({
+  //   model: "accounts/fireworks/models/mixtral-8x7b-instruct",
+  //   max_tokens: 1000,
+  //   stream: true,
+  //   prompt: reqPrompt,
+  // });
 
-  const stream = OpenAIStream(response, {
-    onCompletion: async (completion: string) => {
-      const feedback = completion.split("||");
-      const correctResponse = feedback[0];
-      const incorrectResponse = feedback[1];
-      const moreInfo = feedback[2];
+  const result = await streamObject({
+    // ISSUE => CANT USE FIREWORKS KEY/URL
+    model: openai("accounts/fireworks/models/mixtral-8x7b-instruct"),
+    schema: flashcardSchema,
+    prompt: reqPrompt,
+    maxTokens: 1000,
+    onFinish: async ({ object: feedback }) => {
+      const correctResponse = feedback?.correctResponse;
+      const incorrectResponse = feedback?.incorrectResponse;
+      const moreInfo = feedback?.moreInfo;
 
       await prisma.flashcardAttempt.create({
         data: {
@@ -87,5 +94,6 @@ export async function POST(req: Request, res: Response) {
       });
     },
   });
-  return new StreamingTextResponse(stream);
+
+  return result.toTextStreamResponse();
 }
